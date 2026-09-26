@@ -27,7 +27,7 @@ def generate_timelapse(input_folder=DEFAULT_ANNOTATED_DIR, output_file="temp_tim
     frame = cv2.imread(images[0])
     height, width, layers = frame.shape
     
-    fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+    fourcc = cv2.VideoWriter_fourcc(*'avc1')
     video = cv2.VideoWriter(output_file, fourcc, fps, (width, height))
     
     for image_path in images[-100:]: 
