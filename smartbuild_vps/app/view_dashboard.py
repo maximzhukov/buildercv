@@ -12,18 +12,7 @@ from media_utils import get_latest_frame, generate_timelapse
 def render_timelapse(path):
     with open(path, "rb") as video_file:
         video_data = base64.b64encode(video_file.read()).decode("ascii")
-    st.html(
-        f'<video id="timelapse-video" autoplay="autoplay" muted="muted" loop="loop" '
-        f'playsinline preload="auto" style="width: 100%;" '
-        f'src="data:video/mp4;base64,{video_data}"></video>'
-        f'<script>'
-        f'const video = document.getElementById("timelapse-video");'
-        f'const start = () => video.play().catch(() => {{}});'
-        f'if (video.readyState >= 2) start();'
-        f'else video.addEventListener("canplay", start, {{ once: true }});'
-        f'</script>',
-        unsafe_allow_javascript=True,
-    )
+    st.video(TIMELAPSE_PATH, autoplay=True, loop=True, muted=True)
 
 
 def render_live_video(path):
