@@ -14,7 +14,7 @@ TARGET_URL = "http://127.0.0.1:8000/api/upload"  # Маршрут для тяж�
 # --- НАСТРОЙКИ ВРЕМЕНИ ---
 START_TIME = datetime.strptime("08:00:00", "%H:%M:%S")
 INTERVAL_MINUTES = 6      # Шаг виртуального времени (в БД будет 08:00, 08:06...)
-REAL_DELAY_SEC = 30       # Для демо ждем 30 секунд. В продакшене тут будет 360 сек.
+REAL_DELAY_SEC = 5       # Для демо ждем 30 секунд. В продакшене тут будет 360 сек.
 
 def run_edge_ai_sender():
     if not os.path.exists(FRAMES_DIR):
