@@ -1,8 +1,8 @@
 # app.py
 import time
 import streamlit as st
-from buildercv.smartbuild_vps.app.view_mapping import render_mapping_page
-from buildercv.smartbuild_vps.app.view_dashboard import render_dashboard_page
+from view_mapping import render_mapping_page
+from view_dashboard import render_dashboard_page
 
 st.set_page_config(page_title="SmartBuild AI | ГЭСН", layout="wide", initial_sidebar_state="expanded")
 

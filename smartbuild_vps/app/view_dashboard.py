@@ -6,8 +6,8 @@ import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import timedelta
-from buildercv.smartbuild_vps.app.config import ANNOTATED_DIR, TIMELAPSE_PATH, LIVE_PATH
-from buildercv.smartbuild_vps.app.media_utils import get_latest_frame, generate_timelapse
+from config import ANNOTATED_DIR, TIMELAPSE_PATH, LIVE_PATH
+from media_utils import get_latest_frame, generate_timelapse
 
 def render_timelapse(path):
     with open(path, "rb") as video_file:

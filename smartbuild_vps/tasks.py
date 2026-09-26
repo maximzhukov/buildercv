@@ -2,7 +2,7 @@ import os
 import cv2
 from celery import Celery
 from ultralytics import YOLO
-from buildercv.smartbuild_vps.database import SessionLocal, FrameLog
+from database import SessionLocal, FrameLog
 
 # 1. Настройка брокера задач Celery
 celery_app = Celery(

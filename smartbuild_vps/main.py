@@ -3,8 +3,8 @@ import shutil
 from datetime import datetime
 from fastapi import FastAPI, UploadFile, File, Depends
 from sqlalchemy.orm import Session
-from buildercv.smartbuild_vps.database import SessionLocal, FrameLog
-from buildercv.smartbuild_vps.tasks import process_frame
+from database import SessionLocal, FrameLog
+from tasks import process_frame
 
 app = FastAPI(title="SmartBuild MVP API")
 

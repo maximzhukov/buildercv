@@ -1,7 +1,7 @@
 # view_mapping.py
 import streamlit as st
 import pandas as pd
-from buildercv.smartbuild_vps.app.config import GESN_TO_AI_STRATEGY
+from config import GESN_TO_AI_STRATEGY
 
 def render_mapping_page():
     st.header("📂 Классификация плана СМР по ГЭСН")

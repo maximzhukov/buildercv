@@ -4,7 +4,7 @@ import glob
 import shutil
 import subprocess
 import cv2
-from buildercv.smartbuild_vps.app.config import ANNOTATED_DIR
+from config import ANNOTATED_DIR
 
 DEFAULT_ANNOTATED_DIR = ANNOTATED_DIR
 

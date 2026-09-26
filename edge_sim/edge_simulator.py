@@ -7,7 +7,7 @@ from datetime import datetime, timedelta
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FRAMES_DIR = os.getenv(
     "SMARTBUILD_FRAMES_DIR",
-    os.path.join(BASE_DIR, "camera_test_data", "screens", "ca3", "cropped", "timelaps")
+    os.path.join(BASE_DIR, "edge_sim", "timelaps")
 )
 TARGET_URL = "http://127.0.0.1:8000/api/upload"  # Маршрут для тяжелой аналитики (Celery)
 
