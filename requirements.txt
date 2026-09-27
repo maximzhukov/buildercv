@@ -9,3 +9,5 @@ sqlalchemy
 psycopg2-binary
 ultralytics
 opencv-python-headless
+sentence-transformers
+torch

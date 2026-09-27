@@ -8,6 +8,7 @@ import plotly.express as px
 from datetime import timedelta
 from config import ANNOTATED_DIR, TIMELAPSE_PATH, LIVE_PATH
 from media_utils import get_latest_frame, generate_timelapse
+from gantt_component import render_custom_gantt
 
 def render_timelapse(path):
     with open(path, "rb") as video_file:
@@ -26,7 +27,7 @@ def render_live_video(path):
 
 
 def render_dashboard_page():
-    st.header("📊 Оперативный контроль площадки")
+    st.header("Сводка за сегодня")
     
     if st.session_state.plan_df is None:
         st.warning("Сначала классифицируйте план по ГЭСН на первой вкладке.")
@@ -35,34 +36,46 @@ def render_dashboard_page():
     # --- БЛОК 1: KPI МЕТРИКИ ---
     col1, col2, col3, col4 = st.columns(4)
     col1.metric("Статус проекта", "В графике", "0 дней")
-    col2.metric("Свайные работы", "112 шт", "56% от плана")
-    col3.metric("Техника на объекте", "15 ед.", "В норме", delta_color="normal")
-    col4.metric("Опасные зоны (СИЗ)", "1 нарушение", "За сегодня", delta_color="inverse")
     st.markdown("---")
     
     # --- БЛОК 2: ДИАГРАММА ГАНТА ---
     st.subheader("📉 График СМР (План vs Факт ИИ)")
-    gantt_data = []
-    for index, row in st.session_state.plan_df.iterrows():
-        task = row["Наименование работ (из файла)"]
-        start = row["Начало"]
-        end = row["Окончание"]
-        strategy = row["Назначенная AI-Стратегия"]
-        
-        gantt_data.append(dict(Task=task, Start=start, Finish=end, Тип="Бумажный План (CSV)"))
-        if strategy != "Не отслеживать":
-            fact_start = (pd.to_datetime(start) + timedelta(days=1)).strftime("%Y-%m-%d")
-            fact_end = (pd.to_datetime(end) + timedelta(days=3)).strftime("%Y-%m-%d")
-            gantt_data.append(dict(Task=task, Start=fact_start, Finish=fact_end, Тип="Фактическое выполнение (ИИ)"))
 
-    df_gantt = pd.DataFrame(gantt_data)
-    fig = px.timeline(
-        df_gantt, x_start="Start", x_end="Finish", y="Task", color="Тип",
-        color_discrete_map={"Бумажный План (CSV)": "#d3d3d3", "Фактическое выполнение (ИИ)": "#00CC96"}
-    )
-    fig.update_yaxes(autorange="reversed")
-    fig.update_layout(height=350, margin=dict(l=0, r=0, t=30, b=0))
-    st.plotly_chart(fig, width='stretch')
+    import json
+    import os
+    import pandas as pd
+
+    # 1. Читаем демо-конфиг
+    config_path = os.path.join(os.path.dirname(__file__), "demo_config.json")
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            demo_progress = json.load(f)
+    except Exception:
+        demo_progress = {}
+
+    # 2. Анализируем отставания
+    today = pd.Timestamp.today().normalize()
+    has_delays = False
+
+    for idx, row in st.session_state.plan_df.iterrows():
+        end_dt = pd.to_datetime(row["Окончание"])
+        name = str(row["Наименование работ (из файла)"]).strip()
+        
+        # Берем прогресс из JSON (или 0)
+        progress = demo_progress.get(name, 0)
+            
+        if end_dt < today and progress < 100:
+            has_delays = True
+            break
+
+    # 3. Выводим статус
+    if has_delays:
+        st.error("⚠️ **СТАТУС ПРОЕКТА:** Зафиксировано частичное отставание от графика производства работ.", icon="🚨")
+    else:
+        st.success("✅ **СТАТУС ПРОЕКТА:** Строительно-монтажные работы выполняются согласно графику.", icon="🏗️")
+
+    render_custom_gantt(st.session_state.plan_df, height=480)
+    st.markdown("---")
     
     # --- БЛОК 3: ЛАЙВ АНАЛИТИКА С ГРАФИКАМИ ДИНАМИКИ ---
     st.markdown("---")

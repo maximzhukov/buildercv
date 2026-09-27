@@ -1,58 +1,113 @@
-# view_mapping.py
+import os
 import streamlit as st
 import pandas as pd
-from config import GESN_TO_AI_STRATEGY
+from datetime import timedelta
+from nlp_mapper import predict_ai_strategy
+
+def parse_plan_csv(file_or_path, shift_to_today=True):
+    print(f"[Parser] Обработка файла: {file_or_path}, shift_to_today={shift_to_today}")
+    try:
+        df = pd.read_csv(file_or_path, sep=";", encoding="utf-8-sig")
+    except Exception:
+        if hasattr(file_or_path, 'seek'):
+            file_or_path.seek(0)
+        df = pd.read_csv(file_or_path, sep=",", encoding="utf-8-sig")
+        
+    df.columns = [str(c).strip() for c in df.columns]
+
+    start_col = next((c for c in df.columns if "начало" in c.lower()), None)
+    end_col = next((c for c in df.columns if "окончан" in c.lower()), None)
+    name_col = next((c for c in df.columns if "вид работ" in c.lower() or "наименование" in c.lower()), df.columns[0])
+    vol_col = next((c for c in df.columns if "объем" in c.lower()), None)
+
+    if not start_col or not end_col:
+        raise ValueError("В файле не найдены колонки с датами начала и окончания работ.")
+
+    df = df.dropna(subset=[start_col, end_col]).copy()
+    
+    df["Наименование работ (из файла)"] = df[name_col].astype(str).str.strip()
+    df["Объем"] = df[vol_col].astype(str) if vol_col else "-"
+
+    df["Начало"] = pd.to_datetime(df[start_col].astype(str).str.strip(), format="%d.%m.%Y", errors="coerce")
+    df["Окончание"] = pd.to_datetime(df[end_col].astype(str).str.strip(), format="%d.%m.%Y", errors="coerce")
+    df = df.dropna(subset=["Начало", "Окончание"]).copy()
+
+    if shift_to_today:
+        today = pd.Timestamp.today().normalize()
+        target_mask = df["Наименование работ (из файла)"].str.contains("котлован", case=False, na=False)
+        
+        if target_mask.any():
+            target_start = df.loc[target_mask, "Начало"].iloc[0]
+            shift_days = today - (target_start + timedelta(days=2))
+            df["Начало"] = df["Начало"] + shift_days
+            df["Окончание"] = df["Окончание"] + shift_days
+
+    df["Начало"] = df["Начало"].dt.strftime("%Y-%m-%d")
+    df["Окончание"] = df["Окончание"].dt.strftime("%Y-%m-%d")
+
+    # === AI ПОД КАПОТОМ ===
+    # Нейросеть невидимо для пользователя прогоняет каждую строку 
+    # и назначает алгоритмы компьютерного зрения
+    df["Назначенная AI-Стратегия"] = df["Наименование работ (из файла)"].apply(predict_ai_strategy)
+    
+    return df[["Наименование работ (из файла)", "Начало", "Окончание", "Объем", "Назначенная AI-Стратегия"]].reset_index(drop=True)
+
 
 def render_mapping_page():
-    st.header("📂 Классификация плана СМР по ГЭСН")
-    st.write("Сопоставьте этапы работ из вашего графика со стандартными кодами ГЭСН. Система автоматически подберет нужную модель компьютерного зрения.")
+    st.header("📂 Интеллектуальный анализ графика СМР")
     
-    # Генерация демо-данных "из CSV"
-    df = pd.DataFrame({
-        "Наименование работ (из файла)": [
-            "Подготовка территории", 
-            "Копка ямы под секцию 1", 
-            "Вдавливание свай", 
-            "Заливка фундаментной плиты",
-            "Установка металлического забора"
-        ],
-        "Начало": ["2026-09-01", "2026-09-15", "2026-09-25", "2026-10-05", "2026-10-20"],
-        "Окончание": ["2026-09-14", "2026-09-24", "2026-10-04", "2026-10-15", "2026-10-25"],
-        "Объем": ["-", "5000 м3", "200 шт", "800 м3", "150 м"]
-    })
+    col_text, col_upload = st.columns([2, 1])
+    with col_text:
+        st.write("Загрузите график работ (CSV). Нейросеть автоматически проанализирует этапы строительства и в фоновом режиме настроит конвейер компьютерного зрения для каждой задачи.")
         
-    if "Код ГЭСН" not in df.columns:
-        df["Код ГЭСН"] = "Выбрать норму..."
+    with col_upload:
+        uploaded_file = st.file_uploader("Загрузить свой CSV", type=["csv"], label_visibility="collapsed")
+        demo_shift = st.checkbox("🔄 Синхронизировать с текущей датой", value=False, help="Сдвигает график так, чтобы целевой этап выполнялся прямо сейчас.")
+
+    file_id = uploaded_file.name if uploaded_file else "local_plan"
+    current_config = f"{file_id}_{demo_shift}"
+    
+    if st.session_state.get("last_config") != current_config:
+        df = None
+        if uploaded_file is not None:
+            try:
+                df = parse_plan_csv(uploaded_file, shift_to_today=demo_shift)
+                st.success("✅ Пользовательский файл успешно обработан ИИ.")
+            except Exception as e:
+                st.error(f"Ошибка обработки: {e}")
+                st.stop()
+        else:
+            search_paths = ["plan.csv", "../plan.csv", "smartbuild_vps/plan.csv"]
+            for path in search_paths:
+                if os.path.exists(path):
+                    print(f"[Parser] Найден файл: {path}, shift_to_today={demo_shift}")
+                    df = parse_plan_csv(path, shift_to_today=demo_shift)
+                    st.success("✅ Базовый план проекта подгружен и проанализирован ИИ.")
+                    break
+            
+            if df is None:
+                st.warning("Файл `plan.csv` не найден. Пожалуйста, загрузите CSV вручную.")
+                st.stop()
+                
+        st.session_state.current_df = df
+        st.session_state.last_config = current_config
+
+    df = st.session_state.current_df
         
-    st.subheader("🔗 Ручная привязка нормативов")
+    st.subheader("📋 План производства работ")
     
-    edited_df = st.data_editor(
-        df,
-        column_config={
-            "Код ГЭСН": st.column_config.SelectboxColumn(
-                "Норматив ГЭСН",
-                help="Выберите соответствующий раздел ГЭСН",
-                options=list(GESN_TO_AI_STRATEGY.keys()),
-                required=True,
-            ),
-            "Наименование работ (из файла)": st.column_config.Column(disabled=True),
-            "Начало": st.column_config.Column(disabled=True),
-            "Окончание": st.column_config.Column(disabled=True),
-            "Объем": st.column_config.Column(disabled=True),
-        },
-        width='stretch',
-        hide_index=True
-    )
-    
-    edited_df["Назначенная AI-Стратегия"] = edited_df["Код ГЭСН"].map(GESN_TO_AI_STRATEGY)
-    
-    st.subheader("🤖 Результат авто-назначения алгоритмов")
+    # Мы используем column_order, чтобы показать пользователю только чистую таблицу.
+    # При этом колонка "Назначенная AI-Стратегия" сохраняется в памяти и будет передана на дашборд!
     st.dataframe(
-        edited_df[["Наименование работ (из файла)", "Код ГЭСН", "Назначенная AI-Стратегия"]],
-        width='stretch',
-        hide_index=True
+        df,
+        column_order=["Наименование работ (из файла)", "Начало", "Окончание", "Объем"],
+        hide_index=True,
+        use_container_width=True
     )
     
-    if st.button("💾 Утвердить план и запустить ИИ", type="primary"):
-        st.session_state.plan_df = edited_df
-        st.success("Маппинг завершен! Алгоритмы настроены. Перейдите на вкладку 'Дашборд Мониторинга'.")
+    st.markdown("---")
+    
+    if st.button("🚀 Запустить автономный мониторинг объекта", type="primary"):
+        st.session_state.plan_df = df
+        st.session_state.redirect_to_dashboard = True
+        st.rerun()

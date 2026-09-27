@@ -37,8 +37,8 @@ def clear_demo_folders():
 # --- АВТО-ОЧИСТКА ПАПОК ПРИ ЗАПУСКЕ ---
 if "demo_initialized" not in st.session_state:
     st.session_state.demo_initialized = True
-    clear_demo_folders()
-    print("[Система] 🧹 Папки очищены. Готово к новой симуляции!\n")
+    # clear_demo_folders()
+    # print("[Система] 🧹 Папки очищены. Готово к новой симуляции!\n")
 
 # --- Инициализация состояния сессии ---
 if "plan_df" not in st.session_state:
@@ -47,12 +47,21 @@ if "active_media" not in st.session_state:
     st.session_state.active_media = None
 
 # --- Боковое меню (Сайдбар) ---
+if st.session_state.get("redirect_to_dashboard"):
+    st.session_state.current_page = "2. Дашборд Мониторинга"
+    st.session_state.redirect_to_dashboard = False
+
+# --- Боковое меню (Сайдбар) ---
 with st.sidebar:
     st.title("🏗️ SmartBuild AI")
     st.markdown("---")
     
     # Навигация
-    page = st.radio("Навигация:", ["1. Маппинг по ГЭСН", "2. Дашборд Мониторинга"])
+    page = st.radio(
+        "Навигация:", 
+        ["1. Маппинг по ГЭСН", "2. Дашборд Мониторинга"], 
+        key="current_page"
+    )
     
     st.markdown("---")
     st.info("💡 Алгоритмы ИИ привязываются автоматически на основе выбранного кода ГЭСН.")
