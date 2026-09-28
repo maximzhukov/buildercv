@@ -1,0 +1,1 @@
+python date_shifter.py -d 5 -i /Users/maximzhukov/Documents/Хакатон/buildercv/smartbuild_vps/app/plan.csv -o /Users/maximzhukov/Documents/Хакатон/buildercv/smartbuild_vps/app/plan.csv

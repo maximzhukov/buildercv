@@ -3,3 +3,4 @@ __pycache__
 *.png
 *.jpg
 *.mp4
+ai_database.json

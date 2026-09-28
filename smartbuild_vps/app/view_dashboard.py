@@ -2,6 +2,8 @@
 import os
 import base64
 import time
+import json
+import re
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -9,12 +11,12 @@ from datetime import timedelta
 from config import ANNOTATED_DIR, TIMELAPSE_PATH, LIVE_PATH
 from media_utils import get_latest_frame, generate_timelapse
 from gantt_component import render_custom_gantt
+from progress_utils import cumulative_progress, parse_volume
 
 def render_timelapse(path):
     with open(path, "rb") as video_file:
         video_data = base64.b64encode(video_file.read()).decode("ascii")
     st.video(TIMELAPSE_PATH, autoplay=True, loop=True, muted=True)
-
 
 def render_live_video(path):
     with open(path, "rb") as video_file:
@@ -25,119 +27,224 @@ def render_live_video(path):
         f'src="data:video/mp4;base64,{video_data}"></video>'
     )
 
-
 def render_dashboard_page():
-    st.header("Сводка за сегодня")
+    st.header("Сводка за текущий день")
     
     if st.session_state.plan_df is None:
         st.warning("Сначала классифицируйте план по ГЭСН на первой вкладке.")
         st.stop()
-        
-    # --- БЛОК 1: KPI МЕТРИКИ ---
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Статус проекта", "В графике", "0 дней")
-    st.markdown("---")
-    
-    # --- БЛОК 2: ДИАГРАММА ГАНТА ---
-    st.subheader("📉 График СМР (План vs Факт ИИ)")
 
-    import json
-    import os
-    import pandas as pd
-
-    # 1. Читаем демо-конфиг
-    config_path = os.path.join(os.path.dirname(__file__), "demo_config.json")
+    cv_state_path = os.path.join(os.path.dirname(__file__), "..", "cv_state.json")
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            demo_progress = json.load(f)
+        with open(cv_state_path, "r", encoding="utf-8") as f:
+            cv_state = json.load(f)
     except Exception:
-        demo_progress = {}
+        cv_state = {"active_stages": [], "progress": {}, "history": {}}
 
-    # 2. Анализируем отставания
+    active_stages = cv_state.get("active_stages", [])
+    stage_strategies = cv_state.get("stage_strategies", {})
+    history = cv_state.get("history", {})
+    completed_stages = cv_state.get("completed_stages", [])
+    plan_name_col = next(
+        (column for column in st.session_state.plan_df.columns if "наименование" in column.lower()),
+        st.session_state.plan_df.columns[0],
+    )
     today = pd.Timestamp.today().normalize()
-    has_delays = False
+    today_key = today.strftime("%Y-%m-%d")
 
+    # Анализ отставаний
+    delays = []
+    
     for idx, row in st.session_state.plan_df.iterrows():
+        name = str(row[plan_name_col]).strip()
         end_dt = pd.to_datetime(row["Окончание"])
-        name = str(row["Наименование работ (из файла)"]).strip()
         
-        # Берем прогресс из JSON (или 0)
-        progress = demo_progress.get(name, 0)
+        task_history = history.get(name, {})
+        prog = cumulative_progress(task_history, parse_volume(row.get("Объем", 0)))
+        if name in completed_stages:
+            prog = 100
             
-        if end_dt < today and progress < 100:
-            has_delays = True
-            break
+        if end_dt < today and prog < 100:
+            delay_days = (today - end_dt).days
+            if delay_days > 0:
+                delays.append({"name": name, "days": delay_days})
 
-    # 3. Выводим статус
-    if has_delays:
-        st.error("⚠️ **СТАТУС ПРОЕКТА:** Зафиксировано частичное отставание от графика производства работ.", icon="🚨")
+    project_status = "Частично отстает от графика" if delays else "В графике"
+
+    active_strategy_keys = {
+        re.sub(r"\s*\(YOLO11s\)\s*$", "", str(stage)).strip().casefold()
+        for stage in active_stages
+    }
+    plan_volume_col = next(
+        (column for column in st.session_state.plan_df.columns if "объем" in column.lower()),
+        None,
+    )
+    
+    activity_details = []
+    if plan_volume_col:
+        for _, row in st.session_state.plan_df.iterrows():
+            task_name = str(row[plan_name_col]).strip()
+            strategy = stage_strategies.get(task_name, "")
+            normalized_strategy = re.sub(
+                r"\s*\(YOLO11s\)\s*$", "", str(strategy)
+            ).strip().casefold()
+            if normalized_strategy not in active_strategy_keys:
+                continue
+
+            today_entry = history.get(task_name, {}).get(today_key, {})
+            if float(today_entry.get("progress", 0)) == 0:
+                continue
+
+            total_volume = parse_volume(row[plan_volume_col])
+            task_progress = cumulative_progress(history.get(task_name, {}), total_volume)
+            today_volume = float(today_entry.get("fact_vol", 0))
+            today_percent = min(today_volume / total_volume * 100, 100) if total_volume else 0
+
+            activity_details.append({
+                "name": task_name,
+                "history": history.get(task_name, {}),
+                "total_volume": total_volume,
+                "cumulative_progress": task_progress,
+                "today_percent": today_percent
+            })
+
+    # --- БЛОК 1: KPI МЕТРИКИ В ШАПКЕ ---
+    num_cols = max(2, len(active_stages) + 1)
+    cols = st.columns(num_cols)
+
+    with cols[0]:
+        st.metric(label="Статус проекта", value=project_status)
+
+    st.markdown("---")
+
+    # --- БЛОК 2: АКТИВНОСТИ (Сгруппированные блоки) ---
+    if activity_details:
+        st.info("Активные этапы:")
+        st.markdown("<br>", unsafe_allow_html=True)
+        
+        for i, activity in enumerate(activity_details, 1):
+            # Создаем смещение: 5% ширины на цифру, 95% на контент
+            col_num, col_content = st.columns([0.05, 0.95])
+            
+            with col_num:
+                st.markdown(f"### {i}.")
+                
+            with col_content:
+                # 1. Таблица этапа
+                st.dataframe(
+                    pd.DataFrame([{
+                        "Этап": activity["name"],
+                        "Выполнено всего": f"{activity['cumulative_progress']}%",
+                        "Объем за сегодня": f"{activity['today_percent']:.1f}%",
+                    }]),
+                    hide_index=True,
+                    use_container_width=True,
+                )
+                
+                # 2. График динамики
+                task_history = activity["history"]
+                history_dates = sorted(task_history)[-7:]
+                
+                if history_dates:
+                    chart_data = pd.DataFrame({
+                        "Дата": history_dates,
+                        "Объем за день": [
+                            float(task_history[history_date].get("fact_vol", 0))
+                            for history_date in history_dates
+                        ],
+                    })
+                    fig = px.line(
+                        chart_data,
+                        x="Дата",
+                        y="Объем за день",
+                        title=f"Динамика этапа за последние {len(history_dates)} дн.",
+                        markers=True,
+                    )
+                    fig.update_traces(line_color="#FF9F1C", line_width=3)
+                    fig.update_layout(
+                        height=250,
+                        margin=dict(l=0, r=0, t=40, b=0),
+                        xaxis_title=None,
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+
+                    # 3. Прогноз
+                    observed_volumes = chart_data["Объем за день"]
+                    average_daily_volume = observed_volumes.mean()
+                    remaining_volume = activity["total_volume"] * (
+                        1 - activity["cumulative_progress"] / 100
+                    )
+                    if average_daily_volume > 0 and remaining_volume > 0:
+                        days_left = remaining_volume / average_daily_volume
+                        eta_date = today + pd.Timedelta(days=round(days_left))
+                        eta_str = eta_date.strftime("%d.%m.%Y")
+                        st.info(
+                            f"**Прогноз:** При текущем темпе этап завершится "
+                            f"**{eta_str}** (осталось ~{round(days_left)} дн.)"
+                        )
+                    elif activity["cumulative_progress"] >= 100:
+                        st.success("Этап успешно завершен!")
+                    else:
+                        st.info("Недостаточно данных для прогноза")
+                        
+            st.markdown("<hr style='margin-top: 2rem; margin-bottom: 2rem; border-top: 1px dashed #ccc;'>", unsafe_allow_html=True)
     else:
-        st.success("✅ **СТАТУС ПРОЕКТА:** Строительно-монтажные работы выполняются согласно графику.", icon="🏗️")
+        st.info("Сегодня не выявлено активных этапов")
 
+    # Вывод деталей отставания
+    if delays:
+        st.error("Отставания:")
+        df = pd.DataFrame([
+            {"Название этапа": delay["name"], "Дни": delay["days"]}
+            for delay in delays
+        ])
+        df["Дни"] = df["Дни"].astype(str)
+
+        st.dataframe(df, hide_index=False, use_container_width=True)
+        st.markdown("---")
+        
+    st.subheader("График")
     render_custom_gantt(st.session_state.plan_df, height=480)
     st.markdown("---")
     
-    # --- БЛОК 3: ЛАЙВ АНАЛИТИКА С ГРАФИКАМИ ДИНАМИКИ ---
-    st.markdown("---")
-    st.subheader("📷 Визуальный контроль: Камера 1 (Котлован)")
+    # --- БЛОК 3: ЛАЙВ АНАЛИТИКА ---
+    st.subheader("Визуальный контроль")
+    
+    if "active_media" not in st.session_state or st.session_state.active_media is None:
+        st.session_state.active_media = "live"
+
     col_media, col_controls = st.columns([3, 2])
 
     with col_media:
-        if st.session_state.active_media is None:
-            latest_img = get_latest_frame(ANNOTATED_DIR)
-            print(f"[Dashboard] Последний кадр: {latest_img}, ANNOTATED_DIR={ANNOTATED_DIR}")
-            if latest_img:
-                mod_time = time.strftime('%H:%M:%S', time.localtime(os.path.getmtime(latest_img)))
-                st.image(latest_img, caption=f"🟢 Последний кадр (Обновлено в {mod_time})", width='stretch')
-            else:
-                st.info("Ожидание первых кадров от YOLO...", icon="⏳")
-
-        elif st.session_state.active_media == "timelapse":
+        if st.session_state.active_media == "timelapse":
             with st.spinner("Склеиваем кадры за сегодня..."):
                 success = generate_timelapse(input_folder=ANNOTATED_DIR, output_file=TIMELAPSE_PATH)
                 if success:
-                    st.success("✅ Таймлапс сгенерирован")
+                    st.success("Таймлапс сгенерирован")
                     render_timelapse(TIMELAPSE_PATH)
                 else:
                     st.error("Нет кадров для создания таймлапса.")
-            if st.button("✖️ Закрыть таймлапс"):
-                st.session_state.active_media = None
-                st.rerun()
 
         elif st.session_state.active_media == "live":
-            st.warning("🔴 Прямая трансляция (без обработки ИИ)")
-            # Для MVP просто вставляем заглушку видео или тег HTML. 
-            # В реальности здесь будет st.components.v1.iframe("http://ip_камеры/stream")
+            st.warning("Прямая трансляция")
             render_live_video(LIVE_PATH)
-            
-            if st.button("✖️ Вернуться к AI-кадрам"):
-                st.session_state.active_media = None
-                st.rerun()
 
     with col_controls:
-        st.markdown("**Инструменты просмотра:**")
-        col_btn1, col_btn2 = st.columns(2)
-        with col_btn1:
-            if st.button("⏪ Таймлапс за день", width='stretch'):
-                st.session_state.active_media = "timelapse"
-                st.rerun()
-        with col_btn2:
-            if st.button("🔴 Live-видео", width='stretch'):
-                st.session_state.active_media = "live"
-                st.rerun()
-                
-        st.markdown("<br>", unsafe_allow_html=True)
-        dates = pd.date_range(end=pd.Timestamp.today(), periods=5)
-        df_soil = pd.DataFrame({"Дата": dates, "Вывезено (м³)": [400, 450, 480, 570, 120]})
-        fig_soil = px.bar(
-            df_soil, x="Дата", y="Вывезено (м³)", 
-            title="Динамика вывоза грунта (ГЭСН 01)", text_auto=True
-        )
-        fig_soil.update_traces(marker_color='#FF9F1C')
-        fig_soil.update_layout(height=280, margin=dict(l=0, r=0, t=40, b=0), xaxis_title=None)
-        st.plotly_chart(fig_soil, width='stretch')
-        
-    st.markdown("---")
-    st.subheader("🚨 Лог критических отклонений")
-    st.error("**09:30 | Контроль Земли (Камера 1)** — Снижение темпа вывоза грунта. За час выехало 2 самосвала (Норма: 5).")
-    st.warning("**11:15 | Трекинг буровых (Камера 2)** — Сваебойная установка ID:2 не активна более 45 минут.")
+        is_timelapse_active = st.session_state.active_media == "timelapse"
+        is_live_active = st.session_state.active_media == "live"
+
+        if st.button(
+            "Таймлапс с начала дня", 
+            use_container_width=True, 
+            type="primary" if is_timelapse_active else "secondary"
+        ):
+            st.session_state.active_media = "timelapse"
+            st.rerun()
+            
+        if st.button(
+            "Трансляция", 
+            use_container_width=True, 
+            type="primary" if is_live_active else "secondary"
+        ):
+            st.session_state.active_media = "live"
+            st.rerun()

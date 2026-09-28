@@ -3,21 +3,41 @@ from datetime import timedelta
 import streamlit.components.v1 as components
 import json
 import os
+from progress_utils import cumulative_progress, parse_volume
 
 def render_custom_gantt(plan_df, height=480):
     df = plan_df.copy()
     df['Начало_dt'] = pd.to_datetime(df['Начало'])
     df['Окончание_dt'] = pd.to_datetime(df['Окончание'])
     
-    # 1. ЗАГРУЗКА ДЕМО-ПРОГРЕССА ИЗ JSON
-    config_path = os.path.join(os.path.dirname(__file__), "demo_config.json")
+    # 1. ЧИТАЕМ СОСТОЯНИЕ ОТ YOLO
+    cv_state_path = os.path.join(os.path.dirname(__file__), "../cv_state.json")
     try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            demo_progress = json.load(f)
+        with open(cv_state_path, "r", encoding="utf-8") as f:
+            cv_state = json.load(f)
     except Exception:
-        demo_progress = {} # Фолбэк, если файл не найден
+        cv_state = {
+            "active_stages": ["Механизированная разработка и выемка грунта котлована"],
+            "progress": {"Exception": 68}
+        }
 
-    # --- ВЫЧИСЛЕНИЕ ГРАНИЦ ТАЙМЛАЙНА ---
+    active_stages = cv_state.get("active_stages", [])
+    stage_strategies = cv_state.get("stage_strategies", {})
+    history = cv_state.get("history", {})
+    completed_stages = cv_state.get("completed_stages", [])
+
+    # 2. ИЩЕМ АКТИВНЫЕ ИНДЕКСЫ ДЛЯ КАСКАДА
+    active_indices = []
+    for idx, row in df.iterrows():
+        task_name = str(row["Наименование работ"]).strip()
+        stage_id = stage_strategies.get(task_name, task_name)
+        if stage_id in active_stages:
+            active_indices.append(idx)
+            
+    min_active_idx = min(active_indices) if active_indices else -1
+    max_active_idx = max(active_indices) if active_indices else -1
+
+    # Границы таймлайна
     min_date = df['Начало_dt'].min() - timedelta(days=3)
     max_date = df['Окончание_dt'].max() + timedelta(days=14)
     date_range = pd.date_range(start=min_date, end=max_date)
@@ -26,14 +46,10 @@ def render_custom_gantt(plan_df, height=480):
     today = pd.Timestamp.today().normalize()
     today_pos = (today - min_date).days + 0.5 
     
-    # --- ГЕНЕРАЦИЯ ШАПКИ КАЛЕНДАРЯ ---
-    ru_months = {1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр', 5: 'Май', 6: 'Июн',
-                 7: 'Июл', 8: 'Авг', 9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек'}
-    
+    # Генерация шапки
+    ru_months = {1: 'Янв', 2: 'Фев', 3: 'Мар', 4: 'Апр', 5: 'Май', 6: 'Июн', 7: 'Июл', 8: 'Авг', 9: 'Сен', 10: 'Окт', 11: 'Ноя', 12: 'Дек'}
     months_html, days_html, month_lines_html = "", "", ""
-    current_month = None
-    days_in_month = 0
-    month_start_offset = 0
+    current_month, days_in_month, month_start_offset = None, 0, 0
     
     for i, d in enumerate(date_range):
         m_name = f"{ru_months[d.month]} {d.year}"
@@ -41,12 +57,9 @@ def render_custom_gantt(plan_df, height=480):
             if current_month is not None:
                 months_html += f'<div class="month-cell" style="--days: {days_in_month};">{current_month}</div>'
                 month_lines_html += f'<div class="month-line" style="left: calc(var(--day-w) * {month_start_offset});"></div>'
-            current_month = m_name
-            days_in_month = 1
-            month_start_offset = i
+            current_month, days_in_month, month_start_offset = m_name, 1, i
         else:
             days_in_month += 1
-            
         is_weekend = " weekend" if d.weekday() >= 5 else ""
         days_html += f'<div class="day-cell{is_weekend}">{d.day:02d}</div>'
         
@@ -54,62 +67,44 @@ def render_custom_gantt(plan_df, height=480):
         months_html += f'<div class="month-cell" style="--days: {days_in_month};">{current_month}</div>'
         month_lines_html += f'<div class="month-line" style="left: calc(var(--day-w) * {month_start_offset});"></div>'
 
-    # --- ГЕНЕРАЦИЯ СТРОК И ЛОГИКА ОТСТАВАНИЙ ---
+    # Генерация строк
     left_rows_html, right_rows_html = "", ""
     
     for idx, row in df.iterrows():
-        name = str(row["Наименование работ (из файла)"]).strip()
-        start_dt = row['Начало_dt']
-        end_dt = row['Окончание_dt']
+        name = str(row["Наименование работ"]).strip()
+        start_dt, end_dt = row['Начало_dt'], row['Окончание_dt']
         
-        # 2. ПОЛУЧАЕМ ПРОГРЕСС ИЗ СЛОВАРЯ (По умолчанию 0%)
-        progress = demo_progress.get(name, 0)
+        # === БИЗНЕС-ЛОГИКА ЗАКРЫТИЯ ЭТАПОВ ===
+        task_history = history.get(name, {})
+        total_volume = parse_volume(row.get("Объем", 0))
+        progress = cumulative_progress(task_history, total_volume)
+            
+        # Жесткая блокировка 100% для завершенных этапов
+        completed_stages = cv_state.get("completed_stages", [])
+        if name in completed_stages:
+            progress = 100
             
         offset_days = (start_dt - min_date).days
         duration_days = (end_dt - start_dt).days + 1
         task_end_pos = offset_days + duration_days
         
-        left_px = f"calc(var(--day-w) * {offset_days})"
-        width_px = f"calc(var(--day-w) * {duration_days})"
+        left_px, width_px = f"calc(var(--day-w) * {offset_days})", f"calc(var(--day-w) * {duration_days})"
         
-        is_delayed = False
-        delay_html = ""
-        
+        is_delayed, delay_html = False, ""
         if end_dt < today and progress < 100:
             is_delayed = True
             delay_width = today_pos - task_end_pos
             if delay_width > 0:
-                delay_left_px = f"calc(var(--day-w) * {task_end_pos})"
-                delay_width_px = f"calc(var(--day-w) * {delay_width})"
-                delay_html = f'<div class="delay-bar" style="left: {delay_left_px}; width: {delay_width_px};" title="Отставание от графика"></div>'
+                delay_html = f'<div class="delay-bar" style="left: calc(var(--day-w) * {task_end_pos}); width: calc(var(--day-w) * {delay_width});" title="Отставание от графика"></div>'
         
-        if is_delayed: prog_color = '#EF4444'
-        elif progress == 100: prog_color = '#16A34A'
-        elif progress > 0: prog_color = '#2563EB'
-        else: prog_color = '#94A3B8'
+        prog_color = '#EF4444' if is_delayed else '#16A34A' if progress == 100 else '#2563EB' if progress > 0 else '#94A3B8'
 
-        left_rows_html += f"""
-        <div class="left-row">
-            <div class="cell-name" title="{name}">{name}</div>
-            <div class="cell-prog" style="color: {prog_color};">{progress}%</div>
-        </div>
-        """
-        
+        left_rows_html += f'<div class="left-row"><div class="cell-name" title="{name}">{name}</div><div class="cell-prog" style="color: {prog_color};">{progress}%</div></div>'
         tooltip = f"{name}&#10;Начало: {start_dt.strftime('%d.%m.%Y')}&#10;Конец: {end_dt.strftime('%d.%m.%Y')}&#10;Факт: {progress}%"
-        right_rows_html += f"""
-        <div class="right-row">
-            <div class="bar-bg" style="left: {left_px}; width: {width_px};" title="{tooltip}">
-                <div class="bar-fill" style="width: {progress}%;"></div>
-            </div>
-            {delay_html}
-        </div>
-        """
+        right_rows_html += f'<div class="right-row"><div class="bar-bg" style="left: {left_px}; width: {width_px};" title="{tooltip}"><div class="bar-fill" style="width: {progress}%;"></div></div>{delay_html}</div>'
         
-    today_html = ""
-    if min_date <= today <= max_date:
-        today_html = f'<div class="today-line" style="left: calc(var(--day-w) * {today_pos});" title="Текущий день"></div>'
+    today_html = f'<div class="today-line" style="left: calc(var(--day-w) * {today_pos});" title="Текущий день"></div>' if min_date <= today <= max_date else ""
 
-    # --- HTML И CSS (Без изменений) ---
     html_code = f"""
     <!DOCTYPE html>
     <html>

@@ -5,7 +5,7 @@ import streamlit as st
 from view_mapping import render_mapping_page
 from view_dashboard import render_dashboard_page
 
-st.set_page_config(page_title="SmartBuild AI | ГЭСН", layout="wide", initial_sidebar_state="expanded")
+st.set_page_config(page_title="Smart CV building", layout="wide", initial_sidebar_state="expanded")
 
 def clear_demo_folders():
     """Железобетонно находит папку uploads и очищает кадры"""
@@ -53,38 +53,18 @@ if st.session_state.get("redirect_to_dashboard"):
 
 # --- Боковое меню (Сайдбар) ---
 with st.sidebar:
-    st.title("🏗️ SmartBuild AI")
+    st.title("Smart CV building")
     st.markdown("---")
     
     # Навигация
     page = st.radio(
         "Навигация:", 
-        ["1. Маппинг по ГЭСН", "2. Дашборд Мониторинга"], 
+        ["1. Конфигурация", "2. Мониторинг"], 
         key="current_page"
     )
     
-    st.markdown("---")
-    st.info("💡 Алгоритмы ИИ привязываются автоматически на основе выбранного кода ГЭСН.")
-    st.markdown("---")
-    
-    # Элементы управления режимом презентации
-    st.subheader("⚙️ Режим презентации")
-    live_update = st.checkbox("🔴 Включить Live-обновление (каждые 3 сек)")
-    
-    # Кнопка ручного сброса
-    if st.button("🗑️ Сбросить все кадры (Очистить демо)", use_container_width=True):
-        clear_demo_folders() # Вызываем нашу умную функцию
-        st.session_state.active_media = None
-        st.success("Кадры удалены! Запустите edge_simulator.py заново.")
-        time.sleep(2)
-        st.rerun()
-
-if live_update:
-    time.sleep(3)
-    st.rerun()
-
 # --- Маршрутизация (Роутер страниц) ---
-if page == "1. Маппинг по ГЭСН":
+if page == "1. Конфигурация":
     render_mapping_page()
-elif page == "2. Дашборд Мониторинга":
+elif page == "2. Мониторинг":
     render_dashboard_page()
